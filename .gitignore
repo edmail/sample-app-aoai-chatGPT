@@ -1,7 +1,13 @@
 .venv
 frontend/node_modules
+/node_modules
 .env
 # static
 .azure/
 __pycache__/
 .ipynb_checkpoints/
+# Docker
+docker-compose.yml
+
+# Visual Studio Code
+.vscode/

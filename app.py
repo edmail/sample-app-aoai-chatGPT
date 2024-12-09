@@ -36,13 +36,46 @@ from backend.utils import (
     format_pf_non_streaming_response,
 )
 
+# Import mock implementations
+from mocks import (
+    MockAzureOpenAI,
+    MockCosmosConversationClient,
+    MmockUtilities
+)
+
+
+# Check if USE_MOCKS environment variable is set to true
+USE_MOCKS = os.getenv("USE_MOCKS", "false").lower() == "true"
+
+# Enable Microsoft Defender for Cloud Integration
+MS_DEFENDER_ENABLED = os.environ.get("MS_DEFENDER_ENABLED", "true").lower() == "true"
+
+# Use mock implementations if USE_MOCKS is true
+if USE_MOCKS:
+    AzureOpenAI = MockAzureOpenAI
+    CosmosConversationClient = MockCosmosConversationClient
+    get_msdefender_user_json = MmockUtilities.mock_get_msdefender_user_json
+
 bp = Blueprint("routes", __name__, static_folder="static", template_folder="static")
 
 cosmos_db_ready = asyncio.Event()
 
+async def main():
+    client = await init_openai_client()
+    # Use the client for your requests
+    response = await client.chat.completions.create(
+        model=app_settings.azure_openai.model,
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        temperature=1,
+        max_tokens=64
+    )
+    print(response)
+
 
 def create_app():
     app = Quart(__name__)
+    os.environ["USE_MOCKS"] = "true"
+    asyncio.run(main())
     app.register_blueprint(bp)
     app.config["TEMPLATES_AUTO_RELOAD"] = True
     
@@ -57,7 +90,6 @@ def create_app():
             raise e
     
     return app
-
 
 @bp.route("/")
 async def index():
@@ -107,12 +139,15 @@ frontend_settings = {
 }
 
 
-# Enable Microsoft Defender for Cloud Integration
-MS_DEFENDER_ENABLED = os.environ.get("MS_DEFENDER_ENABLED", "true").lower() == "true"
 
-
-# Initialize Azure OpenAI Client
 async def init_openai_client():
+    if os.getenv("USE_MOCKS", "false").lower() == "true":
+        from mocks import MockAzureOpenAI
+        return MockAzureOpenAI()
+    # Existing code for initializing Azure OpenAI client
+
+    # Initialize Azure OpenAI client
+
     azure_openai_client = None
     
     try:
@@ -175,6 +210,9 @@ async def init_openai_client():
 
 
 async def init_cosmosdb_client():
+    if USE_MOCKS:
+        return MockCosmosConversationClient()
+
     cosmos_conversation_client = None
     if app_settings.chat_history:
         try:
@@ -347,9 +385,20 @@ async def send_chat_request(request_body, request_headers):
 
     try:
         azure_openai_client = await init_openai_client()
-        raw_response = await azure_openai_client.chat.completions.with_raw_response.create(**model_args)
-        response = raw_response.parse()
-        apim_request_id = raw_response.headers.get("apim-request-id") 
+        
+        if os.getenv("USE_MOCKS", "false").lower() == "true":
+            # Use mock client logic
+            raw_response = await azure_openai_client.chat.completions.with_raw_response.create(**model_args)
+            response = raw_response.parse()
+            apim_request_id = raw_response.headers.get("apim-request-id")
+        else:
+            # Existing logic for actual Azure OpenAI client
+            raw_response = await azure_openai_client.chat.completions.with_raw_response.create(**model_args)
+            response = raw_response.parse()
+            apim_request_id = raw_response.headers.get("apim-request-id")
+        logging.debug(f"Type of `response`: {type(response)}")
+        logging.debug(f"Response structure: {response.__dict__ if hasattr(response, '__dict__') else response}")
+
     except Exception as e:
         logging.exception("Exception in send_chat_request")
         raise e
@@ -379,6 +428,8 @@ async def stream_chat_request(request_body, request_headers):
     
     async def generate():
         async for completionChunk in response:
+            logging.debug(f"Type of `completionChunk`: {type(completionChunk)}")
+            logging.debug(f"Completion chunk content: {completionChunk.__dict__ if hasattr(completionChunk, '__dict__') else completionChunk}")
             yield format_stream_response(completionChunk, history_metadata, apim_request_id)
 
     return generate()
@@ -388,12 +439,14 @@ async def conversation_internal(request_body, request_headers):
     try:
         if app_settings.azure_openai.stream and not app_settings.base_settings.use_promptflow:
             result = await stream_chat_request(request_body, request_headers)
+            logging.debug(f"Result generator type: {type(result)}")
             response = await make_response(format_as_ndjson(result))
             response.timeout = None
             response.mimetype = "application/json-lines"
             return response
         else:
             result = await complete_chat_request(request_body, request_headers)
+            logging.debug(f"Result type: {type(result)}")
             return jsonify(result)
 
     except Exception as ex:
@@ -881,5 +934,7 @@ async def generate_title(conversation_messages) -> str:
         logging.exception("Exception while generating title", e)
         return messages[-2]["content"]
 
+if __name__ == "__main__":
+    app = create_app()
+    app.run()
 
-app = create_app()

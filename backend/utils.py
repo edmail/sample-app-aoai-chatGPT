@@ -107,6 +107,9 @@ def format_non_streaming_response(chatCompletion, history_metadata, apim_request
     return {}
 
 def format_stream_response(chatCompletionChunk, history_metadata, apim_request_id):
+    logging.debug("Type of `chatCompletionChunk` in format_stream_response: %s", type(chatCompletionChunk))
+    logging.debug("Chunk structure: %s", vars(chatCompletionChunk))
+
     response_obj = {
         "id": chatCompletionChunk.id,
         "model": chatCompletionChunk.model,
@@ -117,30 +120,49 @@ def format_stream_response(chatCompletionChunk, history_metadata, apim_request_i
         "apim-request-id": apim_request_id,
     }
 
-    if len(chatCompletionChunk.choices) > 0:
-        delta = chatCompletionChunk.choices[0].delta
-        if delta:
-            if hasattr(delta, "context"):
-                messageObj = {"role": "tool", "content": json.dumps(delta.context)}
-                response_obj["choices"][0]["messages"].append(messageObj)
-                return response_obj
-            if delta.role == "assistant" and hasattr(delta, "context"):
-                messageObj = {
-                    "role": "assistant",
-                    "context": delta.context,
-                }
-                response_obj["choices"][0]["messages"].append(messageObj)
-                return response_obj
-            else:
-                if delta.content:
+    # Check the USE_MOCKS environment variable
+    use_mocks = os.getenv("USE_MOCKS", "false").lower() == "true"
+
+    if use_mocks:
+        # Updated logic for mocks
+        if hasattr(chatCompletionChunk, "message") and hasattr(chatCompletionChunk.message, "content"):
+            content = chatCompletionChunk.message.content
+            messageObj = {
+                "role": "assistant",
+                "content": content,
+            }
+            response_obj["choices"][0]["messages"].append(messageObj)
+            return response_obj
+
+        return {}
+    else:
+        # Original logic relying on `choices` and `delta`
+        if hasattr(chatCompletionChunk, "choices") and len(chatCompletionChunk.choices) > 0:
+            delta = chatCompletionChunk.choices[0].delta
+            if delta:
+                if hasattr(delta, "context"):
+                    messageObj = {"role": "tool", "content": json.dumps(delta.context)}
+                    response_obj["choices"][0]["messages"].append(messageObj)
+                    return response_obj
+
+                if delta.role == "assistant" and hasattr(delta, "context"):
                     messageObj = {
                         "role": "assistant",
-                        "content": delta.content,
+                        "context": delta.context,
                     }
                     response_obj["choices"][0]["messages"].append(messageObj)
                     return response_obj
 
-    return {}
+                else:
+                    if delta.content:
+                        messageObj = {
+                            "role": "assistant",
+                            "content": delta.content,
+                        }
+                        response_obj["choices"][0]["messages"].append(messageObj)
+                        return response_obj
+
+        return {}
 
 
 def format_pf_non_streaming_response(
